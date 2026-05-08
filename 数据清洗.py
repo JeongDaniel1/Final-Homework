@@ -1,46 +1,97 @@
+import os
 import pandas as pd
 import numpy as np
-from scipy import stats
-from src.utils import generate_quality_report, save_df
+import matplotlib.pyplot as plt
+import seaborn as sns
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.ensemble import RandomForestRegressor
+import re
+from datetime import datetime
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
-def load_and_clean_data(parquet_path: str):
-    """M1 核心逻辑：加载→质量报告→清洗→特征工程（含注释理由）"""
-    df = pd.read_parquet(parquet_path)
-    print(f"原始数据规模：{df.shape[0]}行×{df.shape[1]}列")
+# 配置matplotlib支持中文显示
+plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS']
+plt.rcParams['axes.unicode_minus'] = False
 
-    # 2. 生成数据质量报告（作业要求：缺失率、异常值统计）
-    quality_report = generate_quality_report(df)
+def examine_dataset(file_location):
+    """加载并检查数据集质量"""
+    dataset = pd.read_parquet(file_location)
+    print(f"数据集初始规模: {len(dataset)} 条记录")
+    
+    # 计算各列空值比例
+    null_percentages = (dataset.isnull().sum() / len(dataset) * 100).round(2)
+    print("\n存在空值的字段及其比例 (%):")
+    print(null_percentages[null_percentages > 0])
+    
+    # 关键数值字段的统计摘要
+    print("\n关键数值字段分布统计:")
+    numeric_fields = ['trip_distance', 'fare_amount', 'passenger_count']
+    print(dataset[numeric_fields].describe())
+    return dataset
 
-    # 3. 清洗策略
-    # 3.1 删除关键坐标缺失
-    df = df.dropna(subset=['pickup_longitude', 'pickup_latitude', 'dropoff_longitude', 'dropoff_latitude'])
-    # 3.2 车费合理性
-    df = df[df['fare_amount'] >= 0]
-    # 3.3 行程距离合理性（距离>0，避免0距离高车费的异常记录）
-    df = df[df['trip_distance'] > 0]
-    # 3.4 乘客数合理性
-    df = df[df['passenger_count'].between(0, 6)]
-    # 3.5 经纬度范围
-    df = df[
-        df['pickup_longitude'].between(-74.25, -73.70) &
-        df['pickup_latitude'].between(40.50, 40.91)
-    ]
+def sanitize_records(raw_df):
+    """
+    数据清洗流程：
+    1. 移除无效交易：车费≤0、距离≤0或≥1000英里
+    2. 过滤异常乘客数：0人或超过9人
+    3. 纠正时间逻辑：确保下车时间晚于上车时间
+    4. 剔除极端时长：行程超过10小时的记录
+    """
+    original_count = len(raw_df)
+    
+    # 基础条件筛选
+    mask = (
+        (raw_df['fare_amount'] > 0) &
+        (raw_df['trip_distance'] > 0) & 
+        (raw_df['trip_distance'] < 1000) &
+        (raw_df['passenger_count'] > 0) & 
+        (raw_df['passenger_count'] <= 9) &
+        (raw_df['tpep_dropoff_datetime'] > raw_df['tpep_pickup_datetime'])
+    )
+    cleaned_df = raw_df.loc[mask].copy()
+    
+    # 计算行程时长（小时）
+    trip_hours = (cleaned_df['tpep_dropoff_datetime'] - 
+                  cleaned_df['tpep_pickup_datetime']).dt.total_seconds() / 3600
+    cleaned_df = cleaned_df[trip_hours <= 10]
+    
+    removed = original_count - len(cleaned_df)
+    print(f"数据清洗完成：移除了 {removed} 条异常记录，保留 {len(cleaned_df)} 条有效数据")
+    return cleaned_df
 
-    # 4. 特征提取
-    df['pickup_datetime'] = pd.to_datetime(df['tpep_pickup_datetime'])
-    df['hour'] = df['pickup_datetime'].dt.hour  # 小时
-    df['weekday'] = df['pickup_datetime'].dt.weekday  # 星期
-    df['is_weekend'] = df['weekday'].isin([5,6]).astype(int)  # 是否周末
-    df['is_peak'] = df['hour'].between(7,9) | df['hour'].between(17,19)  # 早晚高峰
-
-    # 5. 自定义衍生特征
-    # 5.1 行程时长
-    df['trip_duration_min'] = (
-        pd.to_datetime(df['tpep_dropoff_datetime']) - df['pickup_datetime']
+def create_features(source_df):
+    """从原始数据中提取有用特征"""
+    pickup_time = source_df['tpep_pickup_datetime']
+    
+    # 时间相关特征
+    source_df['hour_of_day'] = pickup_time.dt.hour
+    source_df['day_of_week'] = pickup_time.dt.weekday  # 周一=0, 周日=6
+    source_df['weekend_flag'] = (source_df['day_of_week'] >= 5).astype(int)
+    
+    # 高峰期标识（工作日早晚高峰）
+    peak_condition = (
+        (source_df['weekend_flag'] == 0) &
+        ((source_df['hour_of_day'].between(7, 9)) | 
+         (source_df['hour_of_day'].between(17, 19)))
+    )
+    source_df['peak_period'] = peak_condition.astype(int)
+    
+    # 行程特征
+    source_df['duration_minutes'] = (
+        source_df['tpep_dropoff_datetime'] - pickup_time
     ).dt.total_seconds() / 60
-    # 5.2 单位距离车费：反映定价合理性
-    df['fare_per_mile'] = df['fare_amount'] / df['trip_distance']
-
-    # 保存清洗后数据
-    save_df(df, '../data/cleaned_taxi_data.parquet')
-    return df, quality_report
+    
+    # 计算平均速度（英里/小时）
+    source_df['speed_mph'] = source_df['trip_distance'] / (source_df['duration_minutes'] / 60)
+    
+    # 移除速度异常值
+    source_df = source_df[source_df['speed_mph'] <= 120].copy()
+    return source_df
