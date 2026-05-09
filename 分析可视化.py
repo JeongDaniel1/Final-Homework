@@ -44,7 +44,7 @@ def visualize_patterns(processed_df):
     plt.xticks(range(0, 24, 2))
     plt.legend(title='日期类型', labels=['工作日', '周末'])
     plt.grid(alpha=0.3)
-    plt.savefig(os.path.join(output_folder, 'hourly_demand.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_folder, 'visualizationshourly_demand.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # 图2：热门区域订单分布
@@ -56,14 +56,14 @@ def visualize_patterns(processed_df):
     region_summary['total_orders'] = region_summary.sum(axis=1)
     region_summary = region_summary.sort_values('total_orders', ascending=False).drop(columns='total_orders')
     
-    region_summary.plot(kind='bar', stacked=True, color=['lightblue', 'salmon'])
+    region_summary.plot(kind='bar', stacked=True, color=['orange', 'salmon'])
     plt.title('十大热门区域订单时段分布')
     plt.xlabel('区域编号')
     plt.ylabel('订单总量')
     plt.legend(['平峰期', '高峰期'])
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.savefig(os.path.join(output_folder, 'regional_hotspots.png'), dpi=300)
+    plt.savefig(os.path.join(output_folder, 'visualizationsregional_hotspots.jpg'), dpi=300)
     plt.close()
     
     # 图3：费用与距离关系
@@ -82,7 +82,7 @@ def visualize_patterns(processed_df):
     plt.xlim(0, x_limit)
     plt.ylim(0, y_limit)
     plt.grid(True, alpha=0.3)
-    plt.savefig(os.path.join(output_folder, 'fare_distance_correlation.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_folder, 'visualizationsfare_distance_correlation.jpg'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # 图4：机场订单时段占比
@@ -97,10 +97,10 @@ def visualize_patterns(processed_df):
     hourly_airport['airport_percentage'] = (hourly_airport['airport_orders'] / hourly_airport['total_orders'] * 100).round(1)
     
     # 组合柱状图和折线图
-    ax = sns.barplot(data=hourly_airport, x='hour_of_day', y='airport_percentage', color='lightcyan')
+    ax = sns.barplot(data=hourly_airport, x='hour_of_day', y='airport_percentage', color='lightred')
     ax2 = ax.twinx()
     sns.lineplot(data=hourly_airport, x='hour_of_day', y='airport_percentage', 
-                ax=ax2, color='navy', marker='D', linewidth=2)
+                ax=ax2, color='red', marker='D', linewidth=2)
     
     plt.title('24小时机场订单占比变化')
     ax.set_xlabel('小时 (0-23)')
@@ -112,6 +112,6 @@ def visualize_patterns(processed_df):
         ax.text(idx, value + 0.3, f"{value}%", ha='center', fontsize=8)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_folder, 'airport_share.png'), dpi=300)
+    plt.savefig(os.path.join(output_folder, 'visualizationsairport_share.png'), dpi=300)
     plt.close()
 
